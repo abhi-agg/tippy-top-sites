@@ -1,9 +1,7 @@
 import json
 import logging
-import re
-import zipfile
 import csv
-from io import BytesIO, StringIO
+from io import BytesIO
 from urllib.parse import urljoin
 
 import click
@@ -13,43 +11,13 @@ from robobrowser import RoboBrowser
 
 from nsfw import is_nsfw
 
-
 LINK_SELECTOR = 'link[rel=apple-touch-icon], link[rel=apple-touch-icon-precomposed], link[rel="icon shortcut"], link[rel="shortcut icon"], link[rel="icon"], link[rel="SHORTCUT ICON"], link[rel="fluid-icon"]'
 META_SELECTOR = 'meta[name=apple-touch-icon]'
 FIREFOX_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.12; rv:58.0) Gecko/20100101 Firefox/58.0'
 IPHONE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 10_2_1 like Mac OS X) AppleWebKit/602.4.6 (KHTML, like Gecko) Version/10.0 Mobile/14D27 Safari/602.1'
-ALEXA_DATA_URL = 'http://s3.amazonaws.com/alexa-static/top-1m.csv.zip'
 SVG_ICON_WIDTH = "SVG_ICON_WIDTH"
-# Domains we want to exclude
-DOMAIN_EXCLUSION_LIST = [
-    "higheurest.com",
-    "blogspot.co.id",
-    "pipeschannels.com",
-    "blogspot.mx",
-    "bestadbid.com",
-    "googlevideo.com",
-    "tqeobp89axcn.com",
-    "ioredi.com",
-    "moradu.com",
-    "fedsit.com",
-    "vebadu.com"
-]
-# Additional domains we want to include
-DOMAIN_INCLUSION_LIST = [
-    "mail.google.com",
-    "go.twitch.tv"
-]
 
 logging.basicConfig(filename='debug.log',level=logging.INFO)
-
-
-def _fetch_alexa_top_sites():
-    r = requests.get(ALEXA_DATA_URL, timeout=60)
-    z = zipfile.ZipFile(BytesIO(r.content))
-    rows = StringIO(z.read('top-1m.csv').decode('UTF-8'))
-    for row in rows:
-        rank, domain = row.split(',')
-        yield (int(rank), domain.strip())
 
 def _fetch_top_sites(topsitesfile):
     with open(topsitesfile, newline='') as csvfile:
@@ -62,11 +30,7 @@ def _fetch_top_sites(topsitesfile):
 
 def top_sites(topsitesfile, count):
     logging.info(f'Fetching top {count} sites')
-    top_sites_generator = None
-    if topsitesfile:
-        top_sites_generator = _fetch_top_sites(topsitesfile)
-    else:
-        top_sites_generator = _fetch_alexa_top_sites()
+    top_sites_generator = _fetch_top_sites(topsitesfile)
     return [next(top_sites_generator) for x in range(count)]
 
 def is_url_reachable(url):
@@ -166,14 +130,10 @@ def get_best_icon(images):
 
 def collect_icons_for_top_sites(topsitesfile, count):
     results = []
-    extra_domains = None
-    if not topsitesfile:
-        # Add extra domains only if top site file is not provided by user
-        extra_domains = DOMAIN_INCLUSION_LIST
 
-    for rank, hostname in top_sites(topsitesfile, count) + [(-1, x) for x in extra_domains or []]:
-        # Skip NSFW and blacklisted sites
-        if is_nsfw(hostname) or hostname in DOMAIN_EXCLUSION_LIST:
+    for rank, hostname in top_sites(topsitesfile, count):
+        # Skip NSFW sites
+        if is_nsfw(hostname):
             continue
 
         url = 'https://{hostname}'.format(hostname=hostname)
@@ -195,26 +155,19 @@ def collect_icons_for_top_sites(topsitesfile, count):
     logging.info('Done fetching icons')
     return results
 
-
 @click.command()
-@click.option('--count', default=10, help='Number of sites from a list of Top Sites that should be used to generate the manifest. Default is 10.')
-@click.option('--topsitesfile', type=click.Path(exists=True), help='A csv file containing comma separated rank and domain information (in the same order) of the Top Sites. If no file is provided then Alexa Top Sites are used.')
-@click.option('--minwidth', default=96, help='Minimum width of the site icon. Only those sites that satisfy this requirement are added to the manifest. Default is 96.')
-@click.option('--loadrawsitedata', help='Load the full data from the filename specified')
+@click.option('--count', default=10, help='Number of sites from a list of Top Sites to look for rich favicons (where rich is also configurable). Default is 10.')
+@click.option('--topsitesfile', required=True, type=click.Path(exists=True), help='A csv file containing comma separated rank and domain information (in the same order) of the Top Sites.')
+@click.option('--minwidth', default=52, help='Minimum width of the site icon that qualifies as rich. Return only those sites that satisfy this requirement. Default is 52.')
 @click.option('--saverawsitedata', help='Save the full data to the filename specified')
-def make_manifest(count, minwidth, topsitesfile, saverawsitedata, loadrawsitedata):
+def main(count, minwidth, topsitesfile, saverawsitedata):
     results = []
 
-    if loadrawsitedata:
-        logging.info(f'Loading raw icon data from {loadrawsitedata}')
-        with open(loadrawsitedata) as infile:
-            sites_with_icons = json.loads(infile.read())
-    else:
-        sites_with_icons = collect_icons_for_top_sites(topsitesfile, count)
-        if saverawsitedata:
-            logging.info(f'Saving raw icon data to {saverawsitedata}')
-            with open(saverawsitedata, 'w') as outfile:
-                json.dump(sites_with_icons, outfile, indent=4)
+    sites_with_icons = collect_icons_for_top_sites(topsitesfile, count)
+    if saverawsitedata:
+        logging.info(f'Saving raw icon data to {saverawsitedata}')
+        with open(saverawsitedata, 'w') as outfile:
+            json.dump(sites_with_icons, outfile, indent=4)
 
     for site in sites_with_icons:
         hostname = site.get('hostname')
@@ -235,11 +188,7 @@ def make_manifest(count, minwidth, topsitesfile, saverawsitedata, loadrawsitedat
                 'domains': [hostname]
             })
 
-    # Sort alphabetically
-    results = sorted(results, key=lambda site: site['domains'][0])
-
     click.echo(json.dumps(results, indent=4))
 
-
-if __name__ == '__main__':
-    make_manifest()
+if __name__ == "__main__":
+    main()
