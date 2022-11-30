@@ -1,6 +1,5 @@
 import json
 import logging
-import csv
 from io import BytesIO
 from urllib.parse import urljoin
 
@@ -8,8 +7,6 @@ import click
 import requests
 from PIL import Image
 from robobrowser import RoboBrowser
-
-from nsfw import is_nsfw
 
 LINK_SELECTOR = 'link[rel=apple-touch-icon], link[rel=apple-touch-icon-precomposed], link[rel="icon shortcut"], link[rel="shortcut icon"], link[rel="icon"], link[rel="SHORTCUT ICON"], link[rel="fluid-icon"]'
 META_SELECTOR = 'meta[name=apple-touch-icon]'
@@ -20,13 +17,11 @@ SVG_ICON_WIDTH = "SVG_ICON_WIDTH"
 logging.basicConfig(filename='debug.log',level=logging.INFO)
 
 def _fetch_top_sites(topsitesfile):
-    with open(topsitesfile, newline='') as csvfile:
-        rows = csv.reader(csvfile)
-        for row in rows:
-            if len(row) == 0:
-                # skip empty lines
-                continue
-            yield (row[0], row[1])
+    with open(topsitesfile) as jsonfile:
+        data = json.load(jsonfile)
+        topdomains = data["domains"]
+        for topdomain in topdomains:
+            yield (topdomain["rank"], topdomain["url"])
 
 def top_sites(topsitesfile, count):
     logging.info(f'Fetching top {count} sites')
@@ -86,7 +81,6 @@ def fix_url(url):
         fixed = 'https:{url}'.format(url=url)
     return fixed
 
-
 def get_best_icon(images):
     image_url = None
     image_width = 0
@@ -131,21 +125,10 @@ def get_best_icon(images):
 def collect_icons_for_top_sites(topsitesfile, count):
     results = []
 
-    for rank, hostname in top_sites(topsitesfile, count):
-        # Skip NSFW sites
-        if is_nsfw(hostname):
-            continue
-
-        url = 'https://{hostname}'.format(hostname=hostname)
+    for rank, url in top_sites(topsitesfile, count):
         icons = fetch_icons(url)
-        if len(icons) == 0 and 'www.' not in hostname:
-            # Retry with www. in the hostname as some domains require it explicitly.
-            url = f"https://www.{hostname}"
-            icons = fetch_icons(url)
-
         best_icon_url, best_icon_width = get_best_icon(icons)
         results.append({
-            'hostname': hostname,
             'url': url,
             'icons': icons,
             'rank': rank,
@@ -156,9 +139,9 @@ def collect_icons_for_top_sites(topsitesfile, count):
     return results
 
 @click.command()
-@click.option('--count', default=10, help='Number of sites from a list of Top Sites to look for rich favicons (where rich is also configurable). Default is 10.')
-@click.option('--topsitesfile', required=True, type=click.Path(exists=True), help='A csv file containing comma separated rank and domain information (in the same order) of the Top Sites.')
-@click.option('--minwidth', default=52, help='Minimum width of the site icon that qualifies as rich. Return only those sites that satisfy this requirement. Default is 52.')
+@click.option('--count', default=10, help="Number of sites from a list of Top Sites to look for 'rich' favicons ('rich' is configurable). Default is 10.")
+@click.option('--topsitesfile', required=True, type=click.Path(exists=True), help='A json file containing rank and domain information of the Top Sites.')
+@click.option('--minwidth', default=52, help="Minimum width of the site icon to qualify it as 'rich'. Return icons for only those sites that satisfy this requirement. Default is 52.")
 @click.option('--saverawsitedata', help='Save the full data to the filename specified')
 def main(count, minwidth, topsitesfile, saverawsitedata):
     results = []
@@ -169,26 +152,22 @@ def main(count, minwidth, topsitesfile, saverawsitedata):
         with open(saverawsitedata, 'w') as outfile:
             json.dump(sites_with_icons, outfile, indent=4)
 
-    for site in sites_with_icons:
-        hostname = site.get('hostname')
-        url = site.get('url')
-        icon = site.get('best_icon_url')
-        icon_width = site.get('best_icon_width')
+    #prepare_output(sites_with_icons)
+    with open(topsitesfile) as jsonfile:
+        data = json.load(jsonfile)
+        topdomains = data["domains"]
+        for index in range(count):
+            url = sites_with_icons[index].get('url')
+            icon = sites_with_icons[index].get('best_icon_url')
+            icon_width = sites_with_icons[index].get('best_icon_width')
 
-        # check if there is a best icon that satisfies the minwidth criteria
-        if (icon is None) or ((icon_width != SVG_ICON_WIDTH) and (icon_width < minwidth)):
-            logging.info(f'No icon for "{url}" (best icon width: {icon_width})')
-            continue
-        existing = next((x for x in results if x.get('image_url') == icon), None)
-        if existing:
-            existing.get('domains').append(hostname)
-        else:
-            results.append({
-                'image_url': icon,
-                'domains': [hostname]
-            })
+            # check if there is a best icon that satisfies the minwidth criteria
+            if (icon is None) or ((icon_width != SVG_ICON_WIDTH) and (icon_width < minwidth)):
+                logging.info(f'No icon for "{url}" (best icon width: {icon_width})')
+                continue
+            topdomains[index]["icon"] = icon
 
-    click.echo(json.dumps(results, indent=4))
+    click.echo(json.dumps(data, indent=2))
 
 if __name__ == "__main__":
     main()
