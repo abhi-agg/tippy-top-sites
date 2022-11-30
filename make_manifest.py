@@ -24,9 +24,11 @@ def _fetch_top_sites(topsitesfile):
             yield (topdomain["rank"], topdomain["url"])
 
 def top_sites(topsitesfile, count):
-    logging.info(f'Fetching top {count} sites')
     top_sites_generator = _fetch_top_sites(topsitesfile)
-    return [next(top_sites_generator) for x in range(count)]
+    if count:
+        return [next(top_sites_generator) for x in range(count)]
+    else:
+        return list(top_sites_generator)
 
 def is_url_reachable(url):
     try:
@@ -125,7 +127,9 @@ def get_best_icon(images):
 def collect_icons_for_top_sites(topsitesfile, count):
     results = []
 
-    for rank, url in top_sites(topsitesfile, count):
+    topsites = top_sites(topsitesfile, count)
+    logging.info(f'Fetching icons for {len(topsites)} sites')
+    for rank, url in topsites:
         icons = fetch_icons(url)
         best_icon_url, best_icon_width = get_best_icon(icons)
         results.append({
@@ -139,7 +143,7 @@ def collect_icons_for_top_sites(topsitesfile, count):
     return results
 
 @click.command()
-@click.option('--count', default=10, help="Number of sites from a list of Top Sites to look for 'rich' favicons ('rich' is configurable). Default is 10.")
+@click.option('--count', type=int, help="Number of sites from a list of Top Sites to look for 'rich' favicons ('rich' is configurable). If not specified then the entire top site file is used.")
 @click.option('--topsitesfile', required=True, type=click.Path(exists=True), help='A json file containing rank and domain information of the Top Sites.')
 @click.option('--minwidth', default=52, help="Minimum width of the site icon to qualify it as 'rich'. Return icons for only those sites that satisfy this requirement. Default is 52.")
 @click.option('--saverawsitedata', help='Save the full data to the filename specified')
@@ -156,7 +160,7 @@ def main(count, minwidth, topsitesfile, saverawsitedata):
     with open(topsitesfile) as jsonfile:
         data = json.load(jsonfile)
         topdomains = data["domains"]
-        for index in range(count):
+        for index in range(len(sites_with_icons)):
             url = sites_with_icons[index].get('url')
             icon = sites_with_icons[index].get('best_icon_url')
             icon_width = sites_with_icons[index].get('best_icon_width')
@@ -164,10 +168,14 @@ def main(count, minwidth, topsitesfile, saverawsitedata):
             # check if there is a best icon that satisfies the minwidth criteria
             if (icon is None) or ((icon_width != SVG_ICON_WIDTH) and (icon_width < minwidth)):
                 logging.info(f'No icon for "{url}" (best icon width: {icon_width})')
-                continue
-            topdomains[index]["icon"] = icon
+                icon = ""
+            domain = topdomains[index]
+            domain["icon"] = icon
+            results.append(domain)
 
-    click.echo(json.dumps(data, indent=2))
+    domains_with_icons = {}
+    domains_with_icons["domains"] = results
+    click.echo(json.dumps(domains_with_icons, indent=4))
 
 if __name__ == "__main__":
     main()
